@@ -1,0 +1,6 @@
+{
+    "output_file": "grad_stats.csv",
+    "param_list": [],
+    "stats": ["norm", "mean", "max", "min"],
+    "write_interval": 1
+  }
