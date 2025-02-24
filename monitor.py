@@ -8,18 +8,16 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-# Ascend NPU 支持(若无此环境可注释掉)
 try:
     import torch_npu
 except ImportError:
     torch_npu = None
 
 def distributed_is_initialized():
-    """ 检查是否已经在分布式环境中（已初始化） """
+    """ 检查是否已经在分布式环境中 """
     return dist.is_available() and dist.is_initialized()
 
 def try_init_distributed_backend(backend='hccl'):
-    # 这里就直接用 dist
     if dist.is_available() and not dist.is_initialized():
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -99,7 +97,7 @@ class ColossalAIMonitor:
             record_dict["min"+suffix] = float(grad_tensor.min().item())
 
     def monitor(self, model):
-        """ 用户在训练前调用此方法，为 model 注册梯度 Hook（采集本地梯度）。 """
+        """ 训练前调用此方法，为 model 注册梯度 Hook（采集本地梯度）。 """
         for name, param in model.named_parameters():
             if self.param_list and name not in self.param_list:
                 continue
@@ -116,7 +114,7 @@ class ColossalAIMonitor:
         """
         self.global_step += 1
 
-        # ------ 这里做“聚合后”统计 ------
+        # ------ “聚合后”统计 ------
         if self.parallel_mode == 'none':
             self._collect_global_stats_single(model)
         elif self.parallel_mode == 'dp':
@@ -128,13 +126,12 @@ class ColossalAIMonitor:
             else:
                 self._collect_global_stats_zero2_3(model)
         elif self.parallel_mode == 'tp':
-            # 简化写：假设TP的梯度已在反向里AllReduce完毕
             self._collect_global_stats_simple(model)
         elif self.parallel_mode == 'pp':
             # 流水线并行: local == global
             self._collect_global_stats_single(model)
         else:
-            # 其他或混合并行
+            # 其他或者是混合并行
             self._collect_global_stats_simple(model)
 
         # ------ 写文件 ------
@@ -143,7 +140,7 @@ class ColossalAIMonitor:
             self._flush_to_csv_global()
 
     def _collect_global_stats_single(self, model):
-        """ 对于不需要跨卡聚合的场景(local就是global)，直接写到 global 里即可。 """
+        """ 不需要跨卡聚合的场景 """
         for name, param in model.named_parameters():
             if self.param_list and name not in self.param_list:
                 continue
@@ -157,7 +154,6 @@ class ColossalAIMonitor:
                 self.grad_records_global.append(record)
 
     def _collect_global_stats_simple(self, model):
-        """ 对于像 DP 或 ZeRO1 / TP(已AllReduce) 等场景，param.grad 就是聚合后的梯度。 """
         for name, param in model.named_parameters():
             if self.param_list and name not in self.param_list:
                 continue
@@ -172,7 +168,7 @@ class ColossalAIMonitor:
 
     def _collect_global_stats_zero2_3(self, model):
         """
-        ZeRO Stage2/3: param.grad 在某些时刻只有分片。如需全局统计，需做分布式规约。
+        ZeRO Stage2/3: param.grad
         """
         for name, param in model.named_parameters():
             if self.param_list and name not in self.param_list:
@@ -180,9 +176,8 @@ class ColossalAIMonitor:
             if param.grad is None:
                 continue
 
-            # local partial grads
             grad = param.grad
-            # 计算本地 norm^2, max, min, sum, count ...
+            # 计算本地 norm^2, max, min, sum, count
             local_record = {}
 
             if "norm" in self.stats_to_calc:
@@ -281,7 +276,6 @@ class ColossalAIMonitor:
 def main():
     try_init_distributed_backend(backend='hccl')
 
-    # Ascend NPU 检测
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
     # 定义一个 torch.device
@@ -296,11 +290,11 @@ def main():
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     print(f"[INFO] rank={rank}/{world_size}, local_rank={local_rank}, using device {device}")
 
-    # 2) 加载配置并初始化监控
+    # 加载配置并初始化监控
     config_path = "monitor_config.json"  
     monitor = ColossalAIMonitor(config_path=config_path)
 
-    # 3) 构建一个简单模型 (放到 device 上)
+    # 构建一个简单模型
     model = nn.Sequential(
         nn.Linear(784, 128),
         nn.ReLU(),
@@ -310,18 +304,18 @@ def main():
     # 包装为 DDP
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
-    # 4) 准备模拟数据
+    # 准备模拟数据
     data = torch.rand(64, 784, device=device)
     targets = torch.randint(0, 10, (64,), device=device)
 
-    # 5) 定义损失和优化器
+    # 定义损失和优化器
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-    # 6) 注册梯度 Hook (采集本地)
+    # 注册梯度 Hook (采集本地)
     monitor.monitor(model)
 
-    # 7) 训练循环 (这里演示单epoch)
+    # 训练循环
     epochs = 1
     steps_per_epoch = 5
     for epoch in range(1, epochs + 1):
@@ -348,10 +342,9 @@ def main():
                     diff = (param.grad - grad_copy).abs().max().item()
                     base = grad_copy.abs().max().item()
             
-                    # 如果梯度本身特别小(基准也很小)，我们可以用绝对误差；否则可用相对误差
                     rel_err = diff / (base + 1e-8)
             
-                    # 4) 打印或记录对比结果(可根据阈值判断是否一致)
+                    # 4) 打印或记录对比结果
                     if rel_err > 1e-5:
                         print(f"[CheckTP] Param `{name}` has large difference after manual allreduce: "
                               f"max_abs_diff={diff}, rel_err={rel_err}")
@@ -365,11 +358,8 @@ def main():
             if monitor.rank == 0:
                 print(f"[Epoch {epoch}, Step {step+1}] loss = {loss.item():.4f}")
 
-    # 8) 收尾
     monitor.stop()
 
-    # 如果需要的话，也可 dist.destroy_process_group() 
-    # dist.destroy_process_group()
 
 if __name__ == '__main__':
     main()
