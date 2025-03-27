@@ -1,6 +1,7 @@
 {
-    "output_file": "grad_stats.csv",
-    "param_list": [],
-    "stats": ["norm", "mean", "max", "min"],
-    "write_interval": 1
-  }
+  "parallel_mode": "zero3",
+  "stats": ["norm", "mean", "max", "min"],
+  "write_interval": 1,
+  "output_file_local": "grad_stats_local.csv",
+  "output_file_global": "grad_stats_global.csv"
+}
